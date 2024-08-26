@@ -12,6 +12,8 @@ from llama_index.core import (
     download_loader,
     RAKEKeywordTableIndex,
 )
+import ast
+import re
 from llama_parse.base import ResultType, Language
 from llama_parse import LlamaParse
 from dotenv import load_dotenv
@@ -27,20 +29,14 @@ os.environ["OPENAI_API_BASE"] = "https://api.chatanywhere.tech/v1"
 os.environ['LLAMA_CLOUD_API_KEY']= "llx-TAOQ6V2eepq1Pj7L2o4Y2cZgtbdmsWFn2vP9D6TCg29zKlmM"
 
 
-# Assume this function processes a PDF and returns a DataFrame
-def process_pdf(file_path):
-    # Your LLM model processing code here
-    # For demonstration, we'll just create a dummy DataFrame
-    data = {'Column1': [1, 2, 3], 'Column2': ['A', 'B', 'C']}
-    df = pd.DataFrame(data)
-    return df
+
 
 # Streamlit app
 st.title("PDF Parser")
 
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 parser = LlamaParse(result_type=ResultType.MD,language=Language.ENGLISH)
-# parser = LlamaParse(result_type="markdown")
+
 
 def object_to_dict(obj):
     if isinstance(obj, list):
@@ -50,6 +46,20 @@ def object_to_dict(obj):
     else:
         return obj
 
+def parse_string_data(string):
+    data_list = []
+    responses = re.findall(r'"Response(\d+)":\s*\[(.*?)\]', string, re.DOTALL)
+    for i, response in responses:
+        items = re.findall(r'(\w+): (.*?)(?=,\n|$)', response)
+        response_dict = {key: value.strip() for key, value in items}
+        
+        # Extract the "Question" key-value pair
+        question_match = re.search(r'Question: (.*?)\n', response)
+        if question_match:
+            response_dict['Question'] = question_match.group(1).strip()
+        data_list.append(response_dict)
+    return data_list
+
 if uploaded_file is not None:
     # Save the uploaded file to a temporary location
     with open("temp.pdf", "wb") as f:
@@ -57,19 +67,6 @@ if uploaded_file is not None:
 
     # Process the PDF file
     documents = parser.load_data("temp.pdf")
-
-    # use SimpleDirectoryReader to parse our file
-    # file_extractor = {".pdf": parser}
-    # documents = SimpleDirectoryReader(input_files=['temp.pdf'], file_extractor=file_extractor).load_data()
-    # print(documents)
-
-    # # Display parsed content
-    # st.write("Parsed Content:")
-    # if documents:
-    #     for doc in documents:
-    #         st.markdown(doc)
-    # else:
-    #     st.write("No content found")
 
 
     embed_model = OpenAIEmbedding(model_name="text-embedding-3-small")
@@ -81,33 +78,40 @@ if uploaded_file is not None:
     query_engine = index.as_query_engine(response_mode="accumulate")
 
     query = """Give atleast 6 Market event and its Causal Relationship ( what leeds to what ) in the text and related question and answer pair of the causal relationship
-Please order the response in the following order in JSON Format
+Please order the response in the following order in JSON Format that I can easily put into a CSV file
 
-{
-[
-Market Event: [Relevant Market Event to Causal Relationship],
-Causal Relationship: [Response],
-Question: [Related Question to Causal Relationship],
-Answer: [Answer to the above question],
-],
-
-6 More Later
-}
-
+{"Response":[Market Event: [Relevant Market Event to Causal Relationship],Causal Relationship: [Response],Question: [Related Question to Causal Relationship],Answer: [Answer to the above question]]}
 """
+
+
     response = query_engine.query(query)
-    
-    print(response)
-    print(type(response))
     response = object_to_dict(response)
-    print(type(response))
-
-    print(response)
-
-    df = pd.DataFrame(response.items())  
-    st.write(df)
+    df = pd.DataFrame(response.items()) 
     
+    
+    # String manipulation to extract the two responses
+    response1 , response2 = df[1][0].split('---------------------')
+    resp1 = json.loads(response1.strip("Response 1: "))["Response"]
+    resp2 = json.loads(response2.replace("Response 2: ", ""))["Response"]
+    
+    # Commented out for now but used to test json conversion
+    # st.write(resp1)
+    # st.write(resp2)
+
+    # Put resp1 and resp2 into a DataFrame
+    df1 = pd.DataFrame(resp1)
+    df2 = pd.DataFrame(resp2)
+
+    # Concatenate the two DataFrames
+    df = pd.concat([df1, df2], ignore_index=True)
+
+
+    
+
+    st.write(df)
     df.to_csv('output.csv', index=False)
+
+
 
     st.download_button(
         label="Download CSV",
@@ -116,16 +120,5 @@ Answer: [Answer to the above question],
         mime='text/csv'
     )
 
-    
-
-
-    # print(response)
-
-    # print(type(response))
-
-    # response = json.loads(response)
-
-    # df = pd.DataFrame(response)
-    # st.write(df)
 
 
